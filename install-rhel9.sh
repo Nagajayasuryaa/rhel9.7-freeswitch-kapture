@@ -712,10 +712,49 @@ fi
 # FusionPBX stores its scripts in app/switch/resources/scripts/.
 if [[ -d /var/www/fusionpbx/app/switch/resources/scripts ]]; then
     mkdir -p /usr/share/freeswitch/scripts
-    cp -Rn /var/www/fusionpbx/app/switch/resources/scripts/* \
+    cp -Rf /var/www/fusionpbx/app/switch/resources/scripts/* \
         /usr/share/freeswitch/scripts/ 2>/dev/null || true
     log "Copied FusionPBX Lua scripts to /usr/share/freeswitch/scripts/"
 fi
+
+# Patch FusionPBX template placeholders in /etc/freeswitch/ config files.
+# FusionPBX's conf templates use {v_*} variables that upgrade_switch.php fills
+# from the DB. On first install the DB switch params are empty, and on servers
+# where PHP 8.2 (Remi) didn't install, upgrade_switch.php may fail silently —
+# leaving scripts_dir=nil and SIP profiles with unresolvable XML.
+# We pre-fill the critical values here so FreeSWITCH always starts cleanly.
+# This is idempotent — if upgrade_switch.php already replaced them, sed won't match.
+log "Patching FreeSWITCH config placeholders..."
+_FS_SCRIPTS="/var/www/fusionpbx/app/switch/resources/scripts"
+_FS_SOUNDS="/usr/share/freeswitch/sounds"
+
+# vars.xml — sets FreeSWITCH global variables (scripts_dir, sounds_dir, etc.)
+if [[ -f /etc/freeswitch/vars.xml ]]; then
+    sed -i \
+        -e "s|{v_scripts_dir}|$_FS_SCRIPTS|g" \
+        -e "s|{v_sounds_dir}|$_FS_SOUNDS|g" \
+        -e "s|{v_recordings_dir}|/var/lib/freeswitch/recordings|g" \
+        -e "s|{v_voicemail_dir}|/var/lib/freeswitch/storage/voicemail|g" \
+        -e "s|{v_project_path}|/var/www/fusionpbx|g" \
+        -e "s|{v_http_protocol}|http|g" \
+        -e "s|{domain_name}|$IP_ADDR|g" \
+        /etc/freeswitch/vars.xml
+fi
+
+# SIP profile templates — need real IP/port values to load correctly
+find /etc/freeswitch/sip_profiles -name "*.xml" 2>/dev/null | while read -r _f; do
+    sed -i \
+        -e "s|{v_ext_sip_ip}|$IP_ADDR|g" \
+        -e "s|{v_ext_rtp_ip}|$IP_ADDR|g" \
+        -e "s|{v_sip_ip}|$IP_ADDR|g" \
+        -e "s|{v_rtp_ip}|$IP_ADDR|g" \
+        -e "s|{v_sip_port}|5060|g" \
+        -e "s|{v_sip_tls_port}|5061|g" \
+        -e "s|{v_sip_port_tls}|5061|g" \
+        -e "s|{domain_name}|$IP_ADDR|g" \
+        "$_f" 2>/dev/null || true
+done
+log "FreeSWITCH config placeholders patched."
 
 # Protect music-on-hold from future package updates
 if [[ -d /usr/share/freeswitch/sounds/music ]]; then
