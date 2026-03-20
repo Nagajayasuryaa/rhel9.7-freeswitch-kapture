@@ -13,8 +13,8 @@
 # FusionPBX fork source (same as the official Debian/Ubuntu installer).
 #
 # Architecture differences handled automatically:
-#   x86_64  — yasm/nasm assemblers available, mod_av video module enabled
-#   aarch64 — yasm/nasm skipped (x86-only), mod_av disabled (no x86 codecs)
+#   x86_64  — yasm/nasm assemblers installed; mod_av disabled (ffmpeg not in RHEL 9 repos)
+#   aarch64 — yasm/nasm skipped (x86-only);  mod_av disabled (same reason)
 #
 # WHAT THIS SCRIPT DOES:
 #   1.  Fixes broken repos (removes broken cert-forensics repo)
@@ -659,15 +659,14 @@ if [[ ! -f /usr/bin/freeswitch ]]; then
     sed -i 's:endpoints/mod_skinny:#endpoints/mod_skinny:'                modules.conf
     sed -i 's:endpoints/mod_verto:#endpoints/mod_verto:'                  modules.conf
 
-    # aarch64-specific: disable video/codec modules that rely on x86 assembler
-    # or have no ARM-optimised codec path in this build environment
-    if [[ "$ARCH" == "aarch64" ]]; then
-        log "Disabling video modules that need libav/ffmpeg (not available on aarch64 build)..."
-        sed -i 's:^applications/mod_av:#applications/mod_av:'   modules.conf 2>/dev/null || true
-        sed -i 's:^formats/mod_av:#formats/mod_av:'             modules.conf 2>/dev/null || true
-        sed -i 's:^codecs/mod_vpx:#codecs/mod_vpx:'             modules.conf 2>/dev/null || true
-        sed -i 's:^codecs/mod_h26x:#codecs/mod_h26x:'           modules.conf 2>/dev/null || true
-    fi
+    # Disable mod_av on all architectures — libavformat/libswscale (ffmpeg)
+    # are not available in RHEL 9 standard repos on either x86_64 or aarch64.
+    # mod_vpx and mod_h26x are also disabled for the same reason.
+    log "Disabling mod_av/mod_vpx/mod_h26x (ffmpeg libs not available on RHEL 9)..."
+    sed -i 's:^applications/mod_av:#applications/mod_av:'   modules.conf 2>/dev/null || true
+    sed -i 's:^formats/mod_av:#formats/mod_av:'             modules.conf 2>/dev/null || true
+    sed -i 's:^codecs/mod_vpx:#codecs/mod_vpx:'             modules.conf 2>/dev/null || true
+    sed -i 's:^codecs/mod_h26x:#codecs/mod_h26x:'           modules.conf 2>/dev/null || true
 
     log "Configuring FreeSWITCH..."
     ./configure -C \
