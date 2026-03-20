@@ -56,7 +56,9 @@ chmod +x install-rhel9.sh post-install-rhel9.sh
 # 3. Run inside screen (recommended — compilation takes 30-60 min)
 sudo dnf install -y screen
 screen -S fusionpbx
-sudo bash install-rhel9.sh
+
+# 4. Run with log capture (recommended)
+sudo bash install-rhel9.sh 2>&1 | tee install.log
 ```
 
 If your SSH session drops, reconnect with:
@@ -66,7 +68,78 @@ screen -r fusionpbx
 
 Once `install-rhel9.sh` completes, run the post-install script:
 ```bash
-sudo bash post-install-rhel9.sh
+sudo bash post-install-rhel9.sh 2>&1 | tee post-install.log
+```
+
+---
+
+## Log Output
+
+Both scripts print colour-coded output to the terminal as they run.
+
+### Log levels
+
+| Prefix | Colour | Meaning |
+|---|---|---|
+| `[INFO]  HH:MM:SS` | Green | Normal progress message |
+| `[WARN]  HH:MM:SS` | Yellow | Non-fatal warning (script continues) |
+| `[ERROR] HH:MM:SS` | Red | Fatal error — script exits immediately |
+
+Example output:
+```
+[INFO]  09:14:02 OS:   rocky 9
+[INFO]  09:14:02 Arch: x86_64
+[INFO]  09:14:02 IP:   192.168.1.100
+[WARN]  09:14:10 Some packages may already be installed
+[INFO]  09:14:15 PostgreSQL 14 ready.
+[ERROR] 09:14:20 FreeSWITCH not found. Run install-rhel9.sh first.
+```
+
+### Capturing logs to a file
+
+Run the script with `tee` to save output while still viewing it live:
+
+```bash
+# install log
+sudo bash install-rhel9.sh 2>&1 | tee install.log
+
+# post-install log
+sudo bash post-install-rhel9.sh 2>&1 | tee post-install.log
+```
+
+> **Note:** Using `tee` strips ANSI colour codes from the saved file — the terminal still shows colours.
+
+### Viewing logs after the run
+
+```bash
+# Full install log
+cat install.log
+
+# Filter only errors and warnings
+grep -E "\[ERROR\]|\[WARN\]" install.log
+
+# Filter only errors
+grep "\[ERROR\]" install.log
+
+# Follow live output (if still running)
+tail -f install.log
+```
+
+### System service logs (after installation)
+
+```bash
+# FreeSWITCH application log
+tail -f /var/log/freeswitch/freeswitch.log
+
+# FreeSWITCH systemd journal
+journalctl -xeu freeswitch
+
+# nginx access + error logs
+tail -f /var/log/nginx/access.log
+tail -f /var/log/nginx/error.log
+
+# PHP-FPM log
+journalctl -xeu php82-php-fpm
 ```
 
 ---
