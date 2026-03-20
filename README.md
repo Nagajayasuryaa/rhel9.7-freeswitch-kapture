@@ -176,10 +176,39 @@ Edit the variables at the top of `install-rhel9.sh` before running:
 ```bash
 SYSTEM_USERNAME="admin"      # Web UI login username
 SYSTEM_PASSWORD="random"     # 'random' = auto-generate
-DB_PASSWORD="random"         # 'random' = auto-generate
 PHP_VERSION="82"             # 80 | 81 | 82 | 83
-PG_VERSION="14"              # PostgreSQL version
+PG_VERSION="14"              # PostgreSQL version (also selects psql client version)
+
+# Database — local (default) or centralized/external
+DB_HOST="127.0.0.1"          # Change to remote IP/hostname for external DB
+DB_PORT="5432"
+DB_NAME="fusionpbx"
+DB_USER="fusionpbx"
+DB_PASSWORD="random"         # 'random' = auto-generate (local only)
 ```
+
+#### Using a centralized / external PostgreSQL server
+
+To point FusionPBX at an existing PostgreSQL server instead of installing one locally:
+
+```bash
+DB_HOST="192.168.1.50"       # IP or hostname of your DB server
+DB_PORT="5432"
+DB_NAME="fusionpbx"
+DB_USER="fusionpbx"
+DB_PASSWORD="YourPassword"   # Must be set — 'random' is not allowed for external DB
+```
+
+When `DB_HOST` is not `127.0.0.1` / `localhost` the script will:
+- **Skip** local PostgreSQL installation entirely
+- Install only the `psql` client (for running schema upgrades)
+- **Verify connectivity** to the remote DB before continuing — exits with an error if it cannot connect
+- Write the remote host/port into `/etc/fusionpbx/config.conf`
+
+> **Pre-requisites for external DB:**
+> - The `fusionpbx` and `freeswitch` roles/databases must already exist on the remote server
+> - The DB user must have `SUPERUSER` or sufficient privileges to create tables
+> - The remote server must allow connections from this host (pg_hba.conf + firewall)
 
 ### After Installation
 

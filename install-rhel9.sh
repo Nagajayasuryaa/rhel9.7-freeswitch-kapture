@@ -45,11 +45,24 @@ step()  { echo ""; echo -e "${BLUE}═══════════════
 # --- Configuration (edit if needed) ------------------------------------------
 SYSTEM_USERNAME="admin"
 SYSTEM_PASSWORD="random"   # 'random' = auto-generate, or set a fixed value
+
+# --- Database -----------------------------------------------------------------
+# To use a centralized/external PostgreSQL server:
+#   1. Set DB_HOST to the remote server IP or hostname
+#   2. Set DB_PORT if not using the default 5432
+#   3. Set DB_USER, DB_PASSWORD, DB_NAME to your existing credentials
+#   4. Ensure the remote DB and roles already exist (script will skip local install)
+#
+# To install PostgreSQL locally (default):
+#   Leave DB_HOST as "127.0.0.1" — the script will install and configure it.
+DB_HOST="127.0.0.1"        # Set to remote IP/hostname for centralized DB
+DB_PORT="5432"
 DB_NAME="fusionpbx"
 DB_USER="fusionpbx"
-DB_PASSWORD="random"       # 'random' = auto-generate
+DB_PASSWORD="random"       # 'random' = auto-generate (only used for local install)
+
 PHP_VERSION="82"           # 80 | 81 | 82 | 83
-PG_VERSION="14"
+PG_VERSION="14"            # Used for local install and psql client version
 SWITCH_VERSION="1.10.12"   # FreeSWITCH version to build
 SOFIA_VERSION="1.13.17"    # sofia-sip version to build
 
@@ -160,73 +173,97 @@ done
 log "SELinux set to permissive."
 
 # =============================================================================
-# STEP 3 – PostgreSQL 14
+# STEP 3 – PostgreSQL
 # =============================================================================
-step "STEP 3 – Install PostgreSQL $PG_VERSION"
 
-# Use the PGDG repo URL with the correct EL version and architecture
-PG_REPO_URL="https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-${ARCH}/pgdg-redhat-repo-latest.noarch.rpm"
-log "Adding PGDG repo: EL-9-${ARCH}"
-dnf install -y "$PG_REPO_URL" 2>/dev/null || log "PGDG repo already installed"
+if [[ "$DB_HOST" == "127.0.0.1" || "$DB_HOST" == "localhost" ]]; then
+    step "STEP 3 – Install PostgreSQL $PG_VERSION (local)"
 
-# Disable the system postgresql module to avoid version conflicts
-dnf -qy module disable postgresql 2>/dev/null || true
+    # Use the PGDG repo URL with the correct EL version and architecture
+    PG_REPO_URL="https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-${ARCH}/pgdg-redhat-repo-latest.noarch.rpm"
+    log "Adding PGDG repo: EL-9-${ARCH}"
+    dnf install -y "$PG_REPO_URL" 2>/dev/null || log "PGDG repo already installed"
 
-dnf install -y \
-    "postgresql${PG_VERSION}-server" \
-    "postgresql${PG_VERSION}-contrib" \
-    "postgresql${PG_VERSION}" \
-    "postgresql${PG_VERSION}-libs"
+    # Disable the system postgresql module to avoid version conflicts
+    dnf -qy module disable postgresql 2>/dev/null || true
 
-# Initialise only if the data directory is empty
-if [[ ! -f "/var/lib/pgsql/${PG_VERSION}/data/PG_VERSION" ]]; then
-    log "Initialising PostgreSQL data directory..."
-    "/usr/pgsql-${PG_VERSION}/bin/postgresql-${PG_VERSION}-setup" initdb
-fi
+    dnf install -y \
+        "postgresql${PG_VERSION}-server" \
+        "postgresql${PG_VERSION}-contrib" \
+        "postgresql${PG_VERSION}" \
+        "postgresql${PG_VERSION}-libs"
 
-# Switch to 'md5' auth for localhost (handles both ident and scram-sha-256 defaults)
-PG_HBA="/var/lib/pgsql/${PG_VERSION}/data/pg_hba.conf"
-sed -i 's/\(host[[:space:]]*all[[:space:]]*all[[:space:]]*127\.0\.0\.1\/32[[:space:]]*\)\(ident\|scram-sha-256\)/\1md5/' "$PG_HBA"
-sed -i 's/\(host[[:space:]]*all[[:space:]]*all[[:space:]]*::1\/128[[:space:]]*\)\(ident\|scram-sha-256\)/\1md5/'         "$PG_HBA"
+    # Initialise only if the data directory is empty
+    if [[ ! -f "/var/lib/pgsql/${PG_VERSION}/data/PG_VERSION" ]]; then
+        log "Initialising PostgreSQL data directory..."
+        "/usr/pgsql-${PG_VERSION}/bin/postgresql-${PG_VERSION}-setup" initdb
+    fi
 
-systemctl daemon-reload
-systemctl enable "postgresql-${PG_VERSION}"
-systemctl start  "postgresql-${PG_VERSION}"
+    # Switch to 'md5' auth for localhost (handles both ident and scram-sha-256 defaults)
+    PG_HBA="/var/lib/pgsql/${PG_VERSION}/data/pg_hba.conf"
+    sed -i 's/\(host[[:space:]]*all[[:space:]]*all[[:space:]]*127\.0\.0\.1\/32[[:space:]]*\)\(ident\|scram-sha-256\)/\1md5/' "$PG_HBA"
+    sed -i 's/\(host[[:space:]]*all[[:space:]]*all[[:space:]]*::1\/128[[:space:]]*\)\(ident\|scram-sha-256\)/\1md5/'         "$PG_HBA"
 
-# Generate DB password
-if [[ "$DB_PASSWORD" == "random" ]]; then
-    set +o pipefail
-    DB_PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)
-    set -o pipefail
-fi
+    systemctl daemon-reload
+    systemctl enable "postgresql-${PG_VERSION}"
+    systemctl start  "postgresql-${PG_VERSION}"
 
-# Create roles and databases (idempotent)
-cd /tmp
-runuser -u postgres -- /usr/bin/psql -c \
-    "SELECT 1 FROM pg_roles WHERE rolname='fusionpbx'" 2>/dev/null | grep -q 1 || \
+    # Generate DB password
+    if [[ "$DB_PASSWORD" == "random" ]]; then
+        set +o pipefail
+        DB_PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)
+        set -o pipefail
+    fi
+
+    # Create roles and databases (idempotent)
+    cd /tmp
     runuser -u postgres -- /usr/bin/psql -c \
-    "CREATE ROLE fusionpbx WITH SUPERUSER LOGIN PASSWORD '$DB_PASSWORD';"
+        "SELECT 1 FROM pg_roles WHERE rolname='fusionpbx'" 2>/dev/null | grep -q 1 || \
+        runuser -u postgres -- /usr/bin/psql -c \
+        "CREATE ROLE fusionpbx WITH SUPERUSER LOGIN PASSWORD '$DB_PASSWORD';"
 
-runuser -u postgres -- /usr/bin/psql -c \
-    "SELECT 1 FROM pg_roles WHERE rolname='freeswitch'" 2>/dev/null | grep -q 1 || \
     runuser -u postgres -- /usr/bin/psql -c \
-    "CREATE ROLE freeswitch WITH SUPERUSER LOGIN PASSWORD '$DB_PASSWORD';"
+        "SELECT 1 FROM pg_roles WHERE rolname='freeswitch'" 2>/dev/null | grep -q 1 || \
+        runuser -u postgres -- /usr/bin/psql -c \
+        "CREATE ROLE freeswitch WITH SUPERUSER LOGIN PASSWORD '$DB_PASSWORD';"
 
-runuser -u postgres -- /usr/bin/psql -tc \
-    "SELECT 1 FROM pg_database WHERE datname='fusionpbx'" 2>/dev/null | grep -q 1 || \
-    runuser -u postgres -- /usr/bin/psql -c "CREATE DATABASE fusionpbx;"
+    runuser -u postgres -- /usr/bin/psql -tc \
+        "SELECT 1 FROM pg_database WHERE datname='fusionpbx'" 2>/dev/null | grep -q 1 || \
+        runuser -u postgres -- /usr/bin/psql -c "CREATE DATABASE fusionpbx;"
 
-runuser -u postgres -- /usr/bin/psql -tc \
-    "SELECT 1 FROM pg_database WHERE datname='freeswitch'" 2>/dev/null | grep -q 1 || \
-    runuser -u postgres -- /usr/bin/psql -c "CREATE DATABASE freeswitch;"
+    runuser -u postgres -- /usr/bin/psql -tc \
+        "SELECT 1 FROM pg_database WHERE datname='freeswitch'" 2>/dev/null | grep -q 1 || \
+        runuser -u postgres -- /usr/bin/psql -c "CREATE DATABASE freeswitch;"
 
-runuser -u postgres -- /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE fusionpbx TO fusionpbx;"
-runuser -u postgres -- /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE freeswitch TO fusionpbx;"
-runuser -u postgres -- /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE freeswitch TO freeswitch;"
-runuser -u postgres -- /usr/bin/psql -c "ALTER USER fusionpbx WITH PASSWORD '$DB_PASSWORD';"
-runuser -u postgres -- /usr/bin/psql -c "ALTER USER freeswitch WITH PASSWORD '$DB_PASSWORD';"
+    runuser -u postgres -- /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE fusionpbx TO fusionpbx;"
+    runuser -u postgres -- /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE freeswitch TO fusionpbx;"
+    runuser -u postgres -- /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE freeswitch TO freeswitch;"
+    runuser -u postgres -- /usr/bin/psql -c "ALTER USER fusionpbx WITH PASSWORD '$DB_PASSWORD';"
+    runuser -u postgres -- /usr/bin/psql -c "ALTER USER freeswitch WITH PASSWORD '$DB_PASSWORD';"
 
-log "PostgreSQL $PG_VERSION ready."
+    log "PostgreSQL $PG_VERSION ready (local)."
+else
+    step "STEP 3 – Using external PostgreSQL at $DB_HOST:$DB_PORT"
+
+    [[ "$DB_PASSWORD" == "random" ]] && \
+        error "DB_PASSWORD must be set explicitly when using an external database (DB_HOST=$DB_HOST)"
+
+    # Install only the psql client so we can run queries against the remote DB
+    PG_REPO_URL="https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-${ARCH}/pgdg-redhat-repo-latest.noarch.rpm"
+    dnf install -y "$PG_REPO_URL" 2>/dev/null || true
+    dnf -qy module disable postgresql 2>/dev/null || true
+    dnf install -y "postgresql${PG_VERSION}" 2>/dev/null || true
+
+    # Verify connectivity to the remote database
+    export PGPASSWORD="$DB_PASSWORD"
+    if ! /usr/pgsql-${PG_VERSION}/bin/psql \
+            --host="$DB_HOST" --port="$DB_PORT" --username="$DB_USER" \
+            --dbname="$DB_NAME" -c "SELECT 1;" > /dev/null 2>&1; then
+        error "Cannot connect to external PostgreSQL at $DB_HOST:$DB_PORT as $DB_USER — check credentials and network access"
+    fi
+    unset PGPASSWORD
+    log "External PostgreSQL connection verified: $DB_HOST:$DB_PORT/$DB_NAME"
+fi
 
 # =============================================================================
 # STEP 4 – FusionPBX web source
@@ -806,7 +843,8 @@ done
 
 if [[ -n "$CONF_TMPL" ]]; then
     cp "$CONF_TMPL" /etc/fusionpbx/config.conf
-    sed -i "s|{database_host}|127.0.0.1|g"       /etc/fusionpbx/config.conf
+    sed -i "s|{database_host}|$DB_HOST|g"         /etc/fusionpbx/config.conf
+    sed -i "s|{database_port}|$DB_PORT|g"         /etc/fusionpbx/config.conf
     sed -i "s|{database_name}|$DB_NAME|g"         /etc/fusionpbx/config.conf
     sed -i "s|{database_username}|$DB_USER|g"     /etc/fusionpbx/config.conf
     sed -i "s|{database_password}|$DB_PASSWORD|g" /etc/fusionpbx/config.conf
@@ -814,8 +852,8 @@ else
     cat > /etc/fusionpbx/config.conf << FUSCONF
 <?php
 \$db_type     = 'pgsql';
-\$db_host     = '127.0.0.1';
-\$db_port     = '5432';
+\$db_host     = '$DB_HOST';
+\$db_port     = '$DB_PORT';
 \$db_name     = '$DB_NAME';
 \$db_username = '$DB_USER';
 \$db_password = '$DB_PASSWORD';
@@ -827,6 +865,7 @@ PHP_BIN=$(which "php${PHP_VERSION}" 2>/dev/null || \
           which php80 2>/dev/null || which php 2>/dev/null)
 PSQL_BIN="/usr/pgsql-${PG_VERSION}/bin/psql"
 [[ ! -x "$PSQL_BIN" ]] && PSQL_BIN=$(which psql)
+PSQL_CONN="--host=$DB_HOST --port=$DB_PORT --username=$DB_USER"
 
 log "PHP binary:  $PHP_BIN"
 log "psql binary: $PSQL_BIN"
@@ -845,10 +884,10 @@ USER_SALT=$("$PHP_BIN"   /var/www/fusionpbx/resources/uuid.php)
 export PGPASSWORD="$DB_PASSWORD"
 
 # Insert domain
-DOM_EXISTS=$("$PSQL_BIN" --host=127.0.0.1 --port=5432 --username="$DB_USER" \
+DOM_EXISTS=$("$PSQL_BIN" $PSQL_CONN \
     -tAc "SELECT COUNT(*) FROM v_domains WHERE domain_name='$DOMAIN_NAME';" 2>/dev/null || echo "0")
 if [[ "$DOM_EXISTS" == "0" ]]; then
-    "$PSQL_BIN" --host=127.0.0.1 --port=5432 --username="$DB_USER" \
+    "$PSQL_BIN" $PSQL_CONN \
         -c "INSERT INTO v_domains (domain_uuid, domain_name, domain_enabled) \
             VALUES('$DOMAIN_UUID','$DOMAIN_NAME','true');" 2>/dev/null || warn "Domain insert failed"
 fi
@@ -861,10 +900,10 @@ cd /var/www/fusionpbx
 PASSWORD_HASH=$("$PHP_BIN" -r "echo password_hash('${SYSTEM_PASSWORD}', PASSWORD_BCRYPT);")
 
 # Insert admin user
-USR_EXISTS=$("$PSQL_BIN" --host=127.0.0.1 --port=5432 --username="$DB_USER" \
+USR_EXISTS=$("$PSQL_BIN" $PSQL_CONN \
     -tAc "SELECT COUNT(*) FROM v_users WHERE username='$SYSTEM_USERNAME';" 2>/dev/null || echo "0")
 if [[ "$USR_EXISTS" == "0" ]]; then
-    "$PSQL_BIN" --host=127.0.0.1 --port=5432 --username="$DB_USER" \
+    "$PSQL_BIN" $PSQL_CONN \
         -c "INSERT INTO v_users \
             (user_uuid, domain_uuid, username, password, salt, user_enabled) \
             VALUES('$USER_UUID','$DOMAIN_UUID','$SYSTEM_USERNAME','$PASSWORD_HASH',NULL,'true');" \
@@ -872,12 +911,12 @@ if [[ "$USR_EXISTS" == "0" ]]; then
 fi
 
 # Add admin to superadmin group
-GROUP_UUID=$("$PSQL_BIN" --host=127.0.0.1 --port=5432 --username="$DB_USER" \
+GROUP_UUID=$("$PSQL_BIN" $PSQL_CONN \
     -tAc "SELECT group_uuid FROM v_groups WHERE group_name='superadmin' LIMIT 1;" \
     2>/dev/null | tr -d ' \n') || GROUP_UUID=""
 if [[ -n "$GROUP_UUID" ]]; then
     UG_UUID=$("$PHP_BIN" /var/www/fusionpbx/resources/uuid.php)
-    "$PSQL_BIN" --host=127.0.0.1 --port=5432 --username="$DB_USER" \
+    "$PSQL_BIN" $PSQL_CONN \
         -c "INSERT INTO v_user_groups \
             (user_group_uuid, domain_uuid, group_name, group_uuid, user_uuid) \
             VALUES('$UG_UUID','$DOMAIN_UUID','superadmin','$GROUP_UUID','$USER_UUID');" \
@@ -985,7 +1024,7 @@ echo "  │  (Domain login: ${SYSTEM_USERNAME}@${IP_ADDR})"
 echo "  └─────────────────────────────────────────────────────────┘"
 echo ""
 echo "  ┌── Database ──────────────────────────────────────────────┐"
-echo "  │  Host:     127.0.0.1:5432"
+echo "  │  Host:     $DB_HOST:$DB_PORT"
 echo "  │  Name:     $DB_NAME"
 echo "  │  Username: $DB_USER"
 echo "  │  Password: $DB_PASSWORD"
