@@ -23,12 +23,20 @@ step()  { echo ""; echo -e "${BLUE}═══════════════
 [[ ! -f /usr/bin/freeswitch ]] && error "FreeSWITCH not found. Run install-rhel9.sh first."
 
 ARCH=$(uname -m)
-FS_SRC="/usr/src/freeswitch-1.10.12"          # FreeSWITCH source (used for ESL build)
-FS_MOD_DIR="/usr/lib64/freeswitch/mod"        # Module install directory
-FS_HEADERS="/usr/include/freeswitch"          # FreeSWITCH headers
-PKG_CFG="/usr/lib64/pkgconfig"               # freeswitch.pc lives here
 
-export PKG_CONFIG_PATH="${PKG_CFG}:/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/lib64/pkgconfig:/usr/pgsql-14/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+# Detect lib vs lib64 (RHEL9 uses lib64 on both x86_64 and aarch64, but be safe)
+LIBDIR="lib64"
+[[ -d /usr/lib64 ]] || LIBDIR="lib"
+
+# Detect installed PostgreSQL version (pick highest installed)
+PG_VERSION=$(ls /usr/pgsql-*/bin/psql 2>/dev/null | grep -oP 'pgsql-\K[0-9]+' | sort -n | tail -1 || echo "14")
+
+FS_SRC="/usr/src/freeswitch-1.10.12"                  # FreeSWITCH source (used for ESL build)
+FS_MOD_DIR="/usr/${LIBDIR}/freeswitch/mod"            # Module install directory
+FS_HEADERS="/usr/include/freeswitch"                  # FreeSWITCH headers
+PKG_CFG="/usr/${LIBDIR}/pkgconfig"                    # freeswitch.pc lives here
+
+export PKG_CONFIG_PATH="${PKG_CFG}:/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/lib64/pkgconfig:/usr/pgsql-${PG_VERSION}/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 export C_INCLUDE_PATH="/usr/local/include:/usr/pgsql-14/include${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
 export CPLUS_INCLUDE_PATH="/usr/local/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
 export LD_LIBRARY_PATH="/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

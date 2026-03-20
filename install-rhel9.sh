@@ -126,20 +126,24 @@ dnf install -y \
 
 log "System update complete."
 
-# ---- sngrep (SIP traffic monitor) — not in EPEL aarch64, build from source ----
+# ---- sngrep (SIP traffic monitor) ----
+# Available as RPM in EPEL for x86_64; aarch64 has no binary — build from source
 if ! command -v sngrep &>/dev/null; then
-    log "Building sngrep from source..."
-    dnf install -y libpcap-devel ncurses-devel 2>/dev/null || true
-    cd /usr/local/src
-    [[ -d sngrep ]] && rm -rf sngrep
-    git clone https://github.com/irontec/sngrep.git sngrep
-    cd sngrep
-    ./bootstrap.sh
-    ./configure --with-openssl --with-pcre2
-    make -j"$(nproc)"
-    make install
-    ln -sf /usr/local/bin/sngrep /usr/bin/sngrep
-    log "sngrep $(sngrep --version 2>&1 | head -1) installed."
+    dnf install -y sngrep 2>/dev/null && \
+        log "sngrep installed via dnf." || {
+        log "sngrep not in repos for $ARCH — building from source..."
+        dnf install -y libpcap-devel ncurses-devel 2>/dev/null || true
+        cd /usr/local/src
+        [[ -d sngrep ]] && rm -rf sngrep
+        git clone https://github.com/irontec/sngrep.git sngrep
+        cd sngrep
+        ./bootstrap.sh
+        ./configure --with-openssl --with-pcre2
+        make -j"$(nproc)"
+        make install
+        ln -sf /usr/local/bin/sngrep /usr/bin/sngrep
+        log "sngrep $(sngrep --version 2>&1 | head -1) installed from source."
+    }
 else
     log "sngrep already installed: $(sngrep --version 2>&1 | head -1)"
 fi
