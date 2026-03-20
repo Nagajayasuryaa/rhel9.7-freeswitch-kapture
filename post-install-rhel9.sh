@@ -60,8 +60,10 @@ step "STEP 2 – Clone and build mod_audio_stream"
 cd /usr/local/src
 
 if [[ -d mod_audio_stream ]]; then
-    log "mod_audio_stream already cloned — pulling latest..."
-    git -C mod_audio_stream pull || warn "git pull failed, continuing with existing code"
+    log "mod_audio_stream already cloned — resetting to latest..."
+    git -C mod_audio_stream fetch origin
+    git -C mod_audio_stream reset --hard origin/HEAD
+    git -C mod_audio_stream clean -fd
 else
     git clone https://github.com/amigniter/mod_audio_stream.git
 fi
@@ -118,26 +120,36 @@ else
     log "Building ESL Python3 extension from ${ESL_PY3}..."
     cd "${FS_SRC}/libs/esl"
 
-    # Build the shared ESL C library first
+    # Build the ESL C library
     make -j"$(nproc)" 2>/dev/null || warn "ESL make had warnings"
 
-    # Build the Python3 SWIG wrapper
-    cd "${ESL_PY3}"
-    make -j"$(nproc)" pymod 2>/dev/null || {
-        warn "ESL pymod make failed — trying manual swig approach..."
-        swig -python -modern ESL.i 2>/dev/null || true
-        python3 setup.py build_ext --inplace 2>/dev/null || \
-            warn "ESL Python extension build failed — check swig/python3-devel"
-    }
+    # Build the Python3 .so manually using g++ (make pymod target does not exist in this fork)
+    chmod +x "${ESL_PY3}/python-config" 2>/dev/null || true
+    PYTHON_INC=$(python3 -c "import sysconfig; print(sysconfig.get_path('include'))")
+    log "Compiling _ESL.so (Python include: ${PYTHON_INC})..."
+    g++ -I"${PYTHON_INC}" -I"${FS_SRC}/libs/esl/src/include" \
+        -fPIC -shared \
+        "${ESL_PY3}/esl_wrap.cpp" \
+        "${FS_SRC}/libs/esl/.libs/libesl.a" \
+        -o "${ESL_PY3}/_ESL.so" \
+        -lpthread 2>&1 | grep -v "deprecated\|note:" || \
+        warn "_ESL.so compile had warnings (usually safe to ignore)"
 
-    # Install ESL .so and .py to Python path
-    ESL_SO=$(find "${ESL_PY3}" -name "_ESL.so" 2>/dev/null | head -1)
-    PY3_SITE=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null)
+    # Find first existing site-packages directory
+    PY3_SITE=$(python3 -c "
+import site, os
+for p in site.getsitepackages():
+    if os.path.isdir(p):
+        print(p)
+        break
+" 2>/dev/null)
 
-    if [[ -n "$ESL_SO" && -n "$PY3_SITE" ]]; then
-        cp "${ESL_SO}" "${PY3_SITE}/"
-        cp "${ESL_PY3}/ESL.py" "${PY3_SITE}/"
-        log "ESL Python bindings installed to ${PY3_SITE}"
+    if [[ -f "${ESL_PY3}/_ESL.so" && -n "$PY3_SITE" ]]; then
+        cp "${ESL_PY3}/_ESL.so" "${PY3_SITE}/"
+        cp "${ESL_PY3}/ESL.py"  "${PY3_SITE}/"
+        python3 -c "import ESL; print('ESL import OK')" && \
+            log "ESL Python bindings installed to ${PY3_SITE}" || \
+            warn "ESL installed but import failed — check ${PY3_SITE}/_ESL.so"
     else
         warn "ESL .so not built — will install from python-ESL.zip inside freeswitch-kapture if present"
     fi
