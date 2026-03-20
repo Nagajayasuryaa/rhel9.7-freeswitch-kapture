@@ -842,7 +842,8 @@ cd /var/www/fusionpbx
 "$PHP_BIN" /var/www/fusionpbx/core/upgrade/upgrade_domains.php > /dev/null 2>&1 || true
 
 # Hash admin password
-PASSWORD_HASH=$("$PHP_BIN" -r "echo md5('${USER_SALT}${SYSTEM_PASSWORD}');")
+# FusionPBX current versions use bcrypt (password_hash) not md5+salt
+PASSWORD_HASH=$("$PHP_BIN" -r "echo password_hash('${SYSTEM_PASSWORD}', PASSWORD_BCRYPT);")
 
 # Insert admin user
 USR_EXISTS=$("$PSQL_BIN" --host=127.0.0.1 --port=5432 --username="$DB_USER" \
@@ -851,7 +852,7 @@ if [[ "$USR_EXISTS" == "0" ]]; then
     "$PSQL_BIN" --host=127.0.0.1 --port=5432 --username="$DB_USER" \
         -c "INSERT INTO v_users \
             (user_uuid, domain_uuid, username, password, salt, user_enabled) \
-            VALUES('$USER_UUID','$DOMAIN_UUID','$SYSTEM_USERNAME','$PASSWORD_HASH','$USER_SALT','true');" \
+            VALUES('$USER_UUID','$DOMAIN_UUID','$SYSTEM_USERNAME','$PASSWORD_HASH',NULL,'true');" \
         2>/dev/null || warn "User insert failed"
 fi
 
