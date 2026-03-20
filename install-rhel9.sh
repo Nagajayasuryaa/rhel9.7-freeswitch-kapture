@@ -184,10 +184,10 @@ if [[ ! -f "/var/lib/pgsql/${PG_VERSION}/data/PG_VERSION" ]]; then
     "/usr/pgsql-${PG_VERSION}/bin/postgresql-${PG_VERSION}-setup" initdb
 fi
 
-# Switch from 'ident' to 'md5' auth for localhost
+# Switch to 'md5' auth for localhost (handles both ident and scram-sha-256 defaults)
 PG_HBA="/var/lib/pgsql/${PG_VERSION}/data/pg_hba.conf"
-sed -i 's/\(host[[:space:]]*all[[:space:]]*all[[:space:]]*127\.0\.0\.1\/32[[:space:]]*\)ident/\1md5/' "$PG_HBA"
-sed -i 's/\(host[[:space:]]*all[[:space:]]*all[[:space:]]*::1\/128[[:space:]]*\)ident/\1md5/'         "$PG_HBA"
+sed -i 's/\(host[[:space:]]*all[[:space:]]*all[[:space:]]*127\.0\.0\.1\/32[[:space:]]*\)\(ident\|scram-sha-256\)/\1md5/' "$PG_HBA"
+sed -i 's/\(host[[:space:]]*all[[:space:]]*all[[:space:]]*::1\/128[[:space:]]*\)\(ident\|scram-sha-256\)/\1md5/'         "$PG_HBA"
 
 systemctl daemon-reload
 systemctl enable "postgresql-${PG_VERSION}"
@@ -841,6 +841,9 @@ DOMAIN_UUID=$("$PHP_BIN" /var/www/fusionpbx/resources/uuid.php)
 USER_UUID=$("$PHP_BIN"   /var/www/fusionpbx/resources/uuid.php)
 USER_SALT=$("$PHP_BIN"   /var/www/fusionpbx/resources/uuid.php)
 
+# Export password so psql can authenticate over TCP without prompting
+export PGPASSWORD="$DB_PASSWORD"
+
 # Insert domain
 DOM_EXISTS=$("$PSQL_BIN" --host=127.0.0.1 --port=5432 --username="$DB_USER" \
     -tAc "SELECT COUNT(*) FROM v_domains WHERE domain_name='$DOMAIN_NAME';" 2>/dev/null || echo "0")
@@ -871,7 +874,7 @@ fi
 # Add admin to superadmin group
 GROUP_UUID=$("$PSQL_BIN" --host=127.0.0.1 --port=5432 --username="$DB_USER" \
     -tAc "SELECT group_uuid FROM v_groups WHERE group_name='superadmin' LIMIT 1;" \
-    2>/dev/null | tr -d ' \n')
+    2>/dev/null | tr -d ' \n') || GROUP_UUID=""
 if [[ -n "$GROUP_UUID" ]]; then
     UG_UUID=$("$PHP_BIN" /var/www/fusionpbx/resources/uuid.php)
     "$PSQL_BIN" --host=127.0.0.1 --port=5432 --username="$DB_USER" \
@@ -880,6 +883,8 @@ if [[ -n "$GROUP_UUID" ]]; then
             VALUES('$UG_UUID','$DOMAIN_UUID','superadmin','$GROUP_UUID','$USER_UUID');" \
         2>/dev/null || true
 fi
+
+unset PGPASSWORD
 
 cd /var/www/fusionpbx
 "$PHP_BIN" /var/www/fusionpbx/core/upgrade/upgrade_domains.php > /dev/null 2>&1 || true
