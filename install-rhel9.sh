@@ -398,6 +398,7 @@ dnf module reset php -y >/dev/null 2>&1 || true
 dnf module enable "php:remi-8.$(echo "$PHP_VERSION" | tail -c 2)" -y >/dev/null 2>&1 || true
 
 # Install php82-* SCL-style packages (preferred)
+# imap and xmlrpc are excluded here — they are optional and handled separately below
 dnf install -y \
     "php${PHP_VERSION}" \
     "php${PHP_VERSION}-php-fpm" \
@@ -405,13 +406,11 @@ dnf install -y \
     "php${PHP_VERSION}-php-pgsql" \
     "php${PHP_VERSION}-php-odbc" \
     "php${PHP_VERSION}-php-curl" \
-    "php${PHP_VERSION}-php-imap" \
     "php${PHP_VERSION}-php-opcache" \
     "php${PHP_VERSION}-php-common" \
     "php${PHP_VERSION}-php-pdo" \
     "php${PHP_VERSION}-php-soap" \
     "php${PHP_VERSION}-php-xml" \
-    "php${PHP_VERSION}-php-pecl-xmlrpc" \
     "php${PHP_VERSION}-php-cli" \
     "php${PHP_VERSION}-php-mbstring" \
     "php${PHP_VERSION}-php-process" 2>/dev/null || \
@@ -475,7 +474,7 @@ mkdir -p /var/lib/php/session && chmod 770 /var/lib/php/session
 # runs as freeswitch:daemon, so sessions can't be written → every request
 # appears unauthenticated and all FusionPBX pages show empty.
 for _dir in session opcache wsdlcache; do
-    _path=$(find /var/opt/remi -type d -name "$_dir" 2>/dev/null | head -1)
+    _path=$(find /var/opt/remi -type d -name "$_dir" 2>/dev/null | head -1 || true)
     if [[ -n "$_path" ]]; then
         chown root:daemon "$_path"
         chmod 770 "$_path"
