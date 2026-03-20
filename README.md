@@ -1,6 +1,6 @@
 # rhel9.7-freeswitch-kapture
 
-Automated **FusionPBX + FreeSWITCH** installation script for:
+Automated **FusionPBX + FreeSWITCH + Kapture-CRM** installation scripts for:
 
 - Red Hat Enterprise Linux 9.x
 - Rocky Linux 9.x
@@ -21,6 +21,9 @@ Supports both **x86_64** and **aarch64 (ARM64)** architectures.
 | nginx | Latest | RHEL AppStream |
 | Fail2ban | Latest | EPEL |
 | Memcached | Latest | RHEL AppStream |
+| mod_audio_stream | Latest | Compiled from source |
+| Python ESL bindings | Built from FS source | FreeSWITCH ESL SWIG |
+| Kapture-CRM integration | Latest | Cloned from GitHub |
 
 > **No SignalWire token required.**
 > FreeSWITCH is compiled from the [FusionPBX fork](https://github.com/fusionpbx/freeswitch)
@@ -47,8 +50,8 @@ Supports both **x86_64** and **aarch64 (ARM64)** architectures.
 git clone https://github.com/Nagajayasuryaa/rhel9.7-freeswitch-kapture.git
 cd rhel9.7-freeswitch-kapture
 
-# 2. Make the script executable
-chmod +x install-rhel9.sh
+# 2. Make scripts executable
+chmod +x install-rhel9.sh post-install-rhel9.sh
 
 # 3. Run inside screen (recommended — compilation takes 30-60 min)
 sudo dnf install -y screen
@@ -61,9 +64,16 @@ If your SSH session drops, reconnect with:
 screen -r fusionpbx
 ```
 
+Once `install-rhel9.sh` completes, run the post-install script:
+```bash
+sudo bash post-install-rhel9.sh
+```
+
 ---
 
-## Installation Steps (what the script does)
+## Script 1 — install-rhel9.sh (Base Installation)
+
+### What it does
 
 ```
 STEP 0  — Pre-flight checks (OS version, architecture, root check)
@@ -86,20 +96,19 @@ STEP 12 — Set file permissions
 STEP 13 — Enable and start all services
 ```
 
----
+### Customisation
 
-## Architecture differences handled automatically
+Edit the variables at the top of `install-rhel9.sh` before running:
 
-| | x86_64 | aarch64 |
-|---|---|---|
-| yasm / nasm | Installed | Skipped (x86-only assemblers) |
-| mod_av / mod_vpx | Enabled | Disabled (no x86 codec path) |
-| PostgreSQL repo | EL-9-x86_64 | EL-9-aarch64 |
-| CPU scheduling | Realtime (bare-metal) | Standard (VM-safe) |
+```bash
+SYSTEM_USERNAME="admin"      # Web UI login username
+SYSTEM_PASSWORD="random"     # 'random' = auto-generate
+DB_PASSWORD="random"         # 'random' = auto-generate
+PHP_VERSION="82"             # 80 | 81 | 82 | 83
+PG_VERSION="14"              # PostgreSQL version
+```
 
----
-
-## After Installation
+### After Installation
 
 The script prints your credentials when complete:
 
@@ -120,6 +129,53 @@ If prompted for domain login use:
 ```
 admin@<server-ip>
 ```
+
+---
+
+## Script 2 — post-install-rhel9.sh (Kapture-CRM Integration)
+
+Run this **after** `install-rhel9.sh` has completed successfully.
+
+### What it does
+
+```
+Pre-flight — Verifies FreeSWITCH binary exists before proceeding
+STEP 1     — Install build dependencies for mod_audio_stream
+               (cmake, gcc-c++, speexdsp, libevent, openssl)
+STEP 2     — Clone and compile mod_audio_stream
+               (from github.com/amigniter/mod_audio_stream)
+STEP 3     — Python 3 environment setup
+               (installs python3, pip, setuptools, swig)
+STEP 4     — Build Python ESL bindings from FreeSWITCH source
+               (compiles ESL SWIG bindings from /usr/src/freeswitch-1.10.12)
+STEP 5     — Clone freeswitch-kapture repo (Kapture-CRM integration)
+STEP 6     — Python virtual environment + pip requirements
+               (creates venv, installs all Python dependencies)
+STEP 7     — Load mod_audio_stream into FreeSWITCH
+               (adds module config and reloads FreeSWITCH)
+STEP 8     — Start Kapture-CRM Python services
+               (esl_integration + websocket_server as background services)
+```
+
+### Run it
+
+```bash
+sudo bash post-install-rhel9.sh
+```
+
+> **Note:** This script requires `install-rhel9.sh` to have been run first.
+> It will exit with an error if FreeSWITCH is not installed.
+
+---
+
+## Architecture differences handled automatically
+
+| | x86_64 | aarch64 |
+|---|---|---|
+| yasm / nasm | Installed | Skipped (x86-only assemblers) |
+| mod_av / mod_vpx | Enabled | Disabled (no x86 codec path) |
+| PostgreSQL repo | EL-9-x86_64 | EL-9-aarch64 |
+| CPU scheduling | Realtime (bare-metal) | Standard (VM-safe) |
 
 ---
 
@@ -144,8 +200,13 @@ tail -f /var/log/freeswitch/freeswitch.log
 nginx -t
 ```
 
+**Check mod_audio_stream is loaded:**
+```bash
+fs_cli -x "module_exists mod_audio_stream"
+```
+
 **Rerun if interrupted:**
-The script is safe to re-run — it skips steps already completed
+Both scripts are safe to re-run — they skip steps already completed
 (e.g. if FreeSWITCH binary already exists, compilation is skipped).
 
 ---
@@ -159,17 +220,3 @@ The script is safe to re-run — it skips steps already completed
 | 5060, 5061 | UDP/TCP | SIP |
 | 5080, 5081 | UDP/TCP | SIP (outbound) |
 | 16384–32768 | UDP | RTP media (audio) |
-
----
-
-## Customisation
-
-Edit the variables at the top of `install-rhel9.sh` before running:
-
-```bash
-SYSTEM_USERNAME="admin"      # Web UI login username
-SYSTEM_PASSWORD="random"     # 'random' = auto-generate
-DB_PASSWORD="random"         # 'random' = auto-generate
-PHP_VERSION="82"             # 80 | 81 | 82 | 83
-PG_VERSION="14"              # PostgreSQL version
-```
