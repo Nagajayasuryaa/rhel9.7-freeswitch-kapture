@@ -132,7 +132,7 @@ if ! command -v sngrep &>/dev/null; then
     dnf install -y sngrep 2>/dev/null && \
         log "sngrep installed via dnf." || {
         log "sngrep not in repos for $ARCH — building from source..."
-        dnf install -y libpcap-devel ncurses-devel 2>/dev/null || true
+        dnf install -y libpcap-devel ncurses-devel autoconf automake 2>/dev/null || true
         cd /usr/local/src
         [[ -d sngrep ]] && rm -rf sngrep
         git clone https://github.com/irontec/sngrep.git sngrep
