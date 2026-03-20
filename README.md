@@ -44,7 +44,7 @@ Supports both **x86_64** and **aarch64 (ARM64)** architectures.
 
 ```bash
 # 1. Clone this repo
-git clone https://github.com/Nagajayasuryaa21/rhel9.7-freeswitch-kapture.git
+git clone https://github.com/Nagajayasuryaa/rhel9.7-freeswitch-kapture.git
 cd rhel9.7-freeswitch-kapture
 
 # 2. Make the script executable
