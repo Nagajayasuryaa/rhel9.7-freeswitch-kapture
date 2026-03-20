@@ -707,6 +707,16 @@ if [[ -d /var/www/fusionpbx/app/switch/resources/conf ]]; then
     log "Copied FusionPBX config to /etc/freeswitch/"
 fi
 
+# Copy FusionPBX Lua scripts so FreeSWITCH can find app.lua
+# FreeSWITCH looks in /usr/share/freeswitch/scripts/ by default.
+# FusionPBX stores its scripts in app/switch/resources/scripts/.
+if [[ -d /var/www/fusionpbx/app/switch/resources/scripts ]]; then
+    mkdir -p /usr/share/freeswitch/scripts
+    cp -Rn /var/www/fusionpbx/app/switch/resources/scripts/* \
+        /usr/share/freeswitch/scripts/ 2>/dev/null || true
+    log "Copied FusionPBX Lua scripts to /usr/share/freeswitch/scripts/"
+fi
+
 # Protect music-on-hold from future package updates
 if [[ -d /usr/share/freeswitch/sounds/music ]]; then
     mkdir -p /usr/share/freeswitch/sounds/temp
@@ -936,6 +946,14 @@ unset PGPASSWORD
 
 cd /var/www/fusionpbx
 "$PHP_BIN" /var/www/fusionpbx/core/upgrade/upgrade_domains.php > /dev/null 2>&1 || true
+
+# Regenerate FreeSWITCH XML from database (SIP profiles, dialplan, etc.)
+# This populates /etc/freeswitch/ with correct values from the DB,
+# including the external SIP profile. Without this FreeSWITCH logs
+# "No Such Profile 'external'" on startup.
+"$PHP_BIN" /var/www/fusionpbx/core/upgrade/upgrade_switch.php > /dev/null 2>&1 || \
+    warn "upgrade_switch.php had warnings (normal on first run)"
+
 log "FusionPBX database configured."
 
 # =============================================================================
