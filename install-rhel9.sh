@@ -841,24 +841,22 @@ for d in \
     [[ -f "$d/config.conf" ]] && CONF_TMPL="$d/config.conf" && break
 done
 
-if [[ -n "$CONF_TMPL" ]]; then
-    cp "$CONF_TMPL" /etc/fusionpbx/config.conf
-    sed -i "s|{database_host}|$DB_HOST|g"         /etc/fusionpbx/config.conf
-    sed -i "s|{database_port}|$DB_PORT|g"         /etc/fusionpbx/config.conf
-    sed -i "s|{database_name}|$DB_NAME|g"         /etc/fusionpbx/config.conf
-    sed -i "s|{database_username}|$DB_USER|g"     /etc/fusionpbx/config.conf
-    sed -i "s|{database_password}|$DB_PASSWORD|g" /etc/fusionpbx/config.conf
-else
-    cat > /etc/fusionpbx/config.conf << FUSCONF
-<?php
-\$db_type     = 'pgsql';
-\$db_host     = '$DB_HOST';
-\$db_port     = '$DB_PORT';
-\$db_name     = '$DB_NAME';
-\$db_username = '$DB_USER';
-\$db_password = '$DB_PASSWORD';
+# Always write config.conf in INI format (dot-notation keys).
+# FusionPBX's config.php uses parse_ini_file() for .conf files —
+# PHP syntax ($var = 'value') is NOT valid here.
+cat > /etc/fusionpbx/config.conf << FUSCONF
+database.0.type = pgsql
+database.0.host = $DB_HOST
+database.0.port = $DB_PORT
+database.0.name = $DB_NAME
+database.0.username = $DB_USER
+database.0.password = $DB_PASSWORD
+database.0.sslmode = prefer
+document.root = /var/www/fusionpbx
+document.path =
 FUSCONF
-fi
+chmod 640 /etc/fusionpbx/config.conf
+chown root:nginx /etc/fusionpbx/config.conf
 
 PHP_BIN=$(which "php${PHP_VERSION}" 2>/dev/null || \
           which php82 2>/dev/null || which php81 2>/dev/null || \
