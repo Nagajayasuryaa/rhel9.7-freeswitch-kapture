@@ -274,6 +274,8 @@ if [[ ! -d /var/www/fusionpbx ]]; then
     git clone https://github.com/fusionpbx/fusionpbx.git /var/www/fusionpbx
 else
     log "FusionPBX already present — pulling latest..."
+    # Mark as safe to avoid "dubious ownership" error when running as root
+    git config --global --add safe.directory /var/www/fusionpbx 2>/dev/null || true
     git -C /var/www/fusionpbx pull || warn "git pull failed, continuing with existing code"
 fi
 mkdir -p /var/cache/fusionpbx
@@ -717,44 +719,6 @@ if [[ -d /var/www/fusionpbx/app/switch/resources/scripts ]]; then
     log "Copied FusionPBX Lua scripts to /usr/share/freeswitch/scripts/"
 fi
 
-# Patch FusionPBX template placeholders in /etc/freeswitch/ config files.
-# FusionPBX's conf templates use {v_*} variables that upgrade_switch.php fills
-# from the DB. On first install the DB switch params are empty, and on servers
-# where PHP 8.2 (Remi) didn't install, upgrade_switch.php may fail silently —
-# leaving scripts_dir=nil and SIP profiles with unresolvable XML.
-# We pre-fill the critical values here so FreeSWITCH always starts cleanly.
-# This is idempotent — if upgrade_switch.php already replaced them, sed won't match.
-log "Patching FreeSWITCH config placeholders..."
-_FS_SCRIPTS="/var/www/fusionpbx/app/switch/resources/scripts"
-_FS_SOUNDS="/usr/share/freeswitch/sounds"
-
-# vars.xml — sets FreeSWITCH global variables (scripts_dir, sounds_dir, etc.)
-if [[ -f /etc/freeswitch/vars.xml ]]; then
-    sed -i \
-        -e "s|{v_scripts_dir}|$_FS_SCRIPTS|g" \
-        -e "s|{v_sounds_dir}|$_FS_SOUNDS|g" \
-        -e "s|{v_recordings_dir}|/var/lib/freeswitch/recordings|g" \
-        -e "s|{v_voicemail_dir}|/var/lib/freeswitch/storage/voicemail|g" \
-        -e "s|{v_project_path}|/var/www/fusionpbx|g" \
-        -e "s|{v_http_protocol}|http|g" \
-        -e "s|{domain_name}|$IP_ADDR|g" \
-        /etc/freeswitch/vars.xml
-fi
-
-# SIP profile templates — need real IP/port values to load correctly
-find /etc/freeswitch/sip_profiles -name "*.xml" 2>/dev/null | while read -r _f; do
-    sed -i \
-        -e "s|{v_ext_sip_ip}|$IP_ADDR|g" \
-        -e "s|{v_ext_rtp_ip}|$IP_ADDR|g" \
-        -e "s|{v_sip_ip}|$IP_ADDR|g" \
-        -e "s|{v_rtp_ip}|$IP_ADDR|g" \
-        -e "s|{v_sip_port}|5060|g" \
-        -e "s|{v_sip_tls_port}|5061|g" \
-        -e "s|{v_sip_port_tls}|5061|g" \
-        -e "s|{domain_name}|$IP_ADDR|g" \
-        "$_f" 2>/dev/null || true
-done
-log "FreeSWITCH config placeholders patched."
 
 # Protect music-on-hold from future package updates
 if [[ -d /usr/share/freeswitch/sounds/music ]]; then
@@ -992,6 +956,48 @@ cd /var/www/fusionpbx
 # "No Such Profile 'external'" on startup.
 "$PHP_BIN" /var/www/fusionpbx/core/upgrade/upgrade_switch.php > /dev/null 2>&1 || \
     warn "upgrade_switch.php had warnings (normal on first run)"
+
+# Patch any remaining {v_*} placeholders in /etc/freeswitch/ that
+# upgrade_switch.php failed to fill (DB switch params empty on first install,
+# or PHP 8.0 on AppStream causes upgrade_switch.php to fail silently).
+# MUST run AFTER upgrade_switch.php — that script may rewrite vars.xml.
+# Idempotent: sed won't match on re-run if placeholders already replaced.
+log "Patching FreeSWITCH config placeholders..."
+_FS_SCRIPTS="/var/www/fusionpbx/app/switch/resources/scripts"
+_FS_SOUNDS="/usr/share/freeswitch/sounds"
+
+# vars.xml — sets FreeSWITCH global variables (scripts_dir, sounds_dir, etc.)
+if [[ -f /etc/freeswitch/vars.xml ]]; then
+    sed -i \
+        -e "s|{v_scripts_dir}|$_FS_SCRIPTS|g" \
+        -e "s|{v_sounds_dir}|$_FS_SOUNDS|g" \
+        -e "s|{v_recordings_dir}|/var/lib/freeswitch/recordings|g" \
+        -e "s|{v_voicemail_dir}|/var/lib/freeswitch/storage/voicemail|g" \
+        -e "s|{v_project_path}|/var/www/fusionpbx|g" \
+        -e "s|{v_http_protocol}|http|g" \
+        -e "s|{domain_name}|$IP_ADDR|g" \
+        /etc/freeswitch/vars.xml
+    # Force-inject scripts_dir in case the placeholder name differs across versions
+    if ! grep -q "scripts_dir=$_FS_SCRIPTS" /etc/freeswitch/vars.xml; then
+        sed -i "s|</include>|  <X-PRE-PROCESS cmd=\"set\" data=\"scripts_dir=$_FS_SCRIPTS/\"/>\n</include>|" \
+            /etc/freeswitch/vars.xml
+    fi
+fi
+
+# SIP profile templates — need real IP/port values to load correctly
+find /etc/freeswitch/sip_profiles -name "*.xml" 2>/dev/null | while read -r _f; do
+    sed -i \
+        -e "s|{v_ext_sip_ip}|$IP_ADDR|g" \
+        -e "s|{v_ext_rtp_ip}|$IP_ADDR|g" \
+        -e "s|{v_sip_ip}|$IP_ADDR|g" \
+        -e "s|{v_rtp_ip}|$IP_ADDR|g" \
+        -e "s|{v_sip_port}|5060|g" \
+        -e "s|{v_sip_tls_port}|5061|g" \
+        -e "s|{v_sip_port_tls}|5061|g" \
+        -e "s|{domain_name}|$IP_ADDR|g" \
+        "$_f" 2>/dev/null || true
+done
+log "FreeSWITCH config placeholders patched."
 
 log "FusionPBX database configured."
 
