@@ -389,10 +389,14 @@ step "STEP 7 – Install PHP $PHP_VERSION"
 dnf install -y "https://rpms.remirepo.net/enterprise/remi-release-9.rpm" 2>/dev/null || \
     log "Remi repo already installed"
 
+# Ensure remi-safe repo is enabled (may be disabled on some RHEL EUS/cloud images)
+dnf config-manager --set-enabled remi-safe remi 2>/dev/null || true
+
 dnf module reset php -y 2>/dev/null || true
 dnf module enable "php:remi-8.$(echo "$PHP_VERSION" | tail -c 2)" -y 2>/dev/null || true
 
-dnf install -y \
+# Install php82-* SCL-style packages from remi-safe (preferred)
+dnf install -y --enablerepo=remi-safe,remi \
     "php${PHP_VERSION}" \
     "php${PHP_VERSION}-php-fpm" \
     "php${PHP_VERSION}-php-gd" \
@@ -405,14 +409,22 @@ dnf install -y \
     "php${PHP_VERSION}-php-pdo" \
     "php${PHP_VERSION}-php-soap" \
     "php${PHP_VERSION}-php-xml" \
-    "php${PHP_VERSION}-php-xmlrpc" \
+    "php${PHP_VERSION}-php-pecl-xmlrpc" \
     "php${PHP_VERSION}-php-cli" \
     "php${PHP_VERSION}-php-mbstring" \
     "php${PHP_VERSION}-php-process" 2>/dev/null || \
-dnf install -y \
-    php-fpm php-gd php-pgsql php-odbc php-curl php-imap \
+dnf install -y --enablerepo=remi-safe,remi \
+    php-fpm php-gd php-pgsql php-odbc php-curl \
     php-opcache php-common php-pdo php-soap php-xml \
-    php-xmlrpc php-cli php-mbstring php-process
+    php-cli php-mbstring php-process
+
+# imap and xmlrpc are Remi-only extras — install separately, not fatal if missing
+dnf install -y --enablerepo=remi-safe,remi \
+    "php${PHP_VERSION}-php-imap" \
+    "php${PHP_VERSION}-php-pecl-xmlrpc" 2>/dev/null || \
+dnf install -y --enablerepo=remi-safe,remi \
+    php-imap php-pecl-xmlrpc 2>/dev/null || \
+    warn "php-imap / php-xmlrpc not available — optional, continuing"
 
 PHP_BIN=$(which "php${PHP_VERSION}" 2>/dev/null || \
           which php82 2>/dev/null || which php81 2>/dev/null || \
