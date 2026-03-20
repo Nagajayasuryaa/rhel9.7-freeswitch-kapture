@@ -380,6 +380,15 @@ dnf install -y \
 PHP_BIN=$(which "php${PHP_VERSION}" 2>/dev/null || \
           which php82 2>/dev/null || which php81 2>/dev/null || \
           which php80 2>/dev/null || which php 2>/dev/null)
+
+# Create 'php' symlink — FusionPBX calls 'php' when writing XML configs to FreeSWITCH.
+# Without this, saving extensions/dialplans silently fails.
+if [[ -n "$PHP_BIN" && ! -x /usr/bin/php ]]; then
+    ln -sf "$PHP_BIN" /usr/bin/php
+    ln -sf "$PHP_BIN" /usr/local/bin/php
+    log "Created 'php' symlink -> $PHP_BIN"
+fi
+
 PHP_INI=$("$PHP_BIN" --ini 2>/dev/null | grep "Loaded Configuration" | awk '{print $NF}' || true)
 PHP_FPM_CONF=$(find /etc -name "www.conf" -path "*/php-fpm.d/*" 2>/dev/null | head -1 || true)
 PHP_FPM_SVC=$(systemctl list-unit-files 2>/dev/null | \
