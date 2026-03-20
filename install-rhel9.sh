@@ -420,6 +420,18 @@ if [[ -n "$PHP_FPM_CONF" && -f "$PHP_FPM_CONF" ]]; then
 fi
 
 mkdir -p /var/lib/php/session && chmod 770 /var/lib/php/session
+
+# Fix Remi PHP session/opcache dirs — default group is 'apache' but PHP-FPM
+# runs as freeswitch:daemon, so sessions can't be written → every request
+# appears unauthenticated and all FusionPBX pages show empty.
+for _dir in session opcache wsdlcache; do
+    _path=$(find /var/opt/remi -type d -name "$_dir" 2>/dev/null | head -1)
+    if [[ -n "$_path" ]]; then
+        chown root:daemon "$_path"
+        chmod 770 "$_path"
+        log "Fixed permissions: $_path"
+    fi
+done
 log "PHP $PHP_VERSION installed."
 
 # =============================================================================
