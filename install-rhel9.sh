@@ -173,34 +173,36 @@ systemctl start  "postgresql-${PG_VERSION}"
 
 # Generate DB password
 if [[ "$DB_PASSWORD" == "random" ]]; then
+    set +o pipefail
     DB_PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)
+    set -o pipefail
 fi
 
 # Create roles and databases (idempotent)
 cd /tmp
-sudo -u postgres /usr/bin/psql -c \
+runuser -u postgres -- /usr/bin/psql -c \
     "SELECT 1 FROM pg_roles WHERE rolname='fusionpbx'" 2>/dev/null | grep -q 1 || \
-    sudo -u postgres /usr/bin/psql -c \
+    runuser -u postgres -- /usr/bin/psql -c \
     "CREATE ROLE fusionpbx WITH SUPERUSER LOGIN PASSWORD '$DB_PASSWORD';"
 
-sudo -u postgres /usr/bin/psql -c \
+runuser -u postgres -- /usr/bin/psql -c \
     "SELECT 1 FROM pg_roles WHERE rolname='freeswitch'" 2>/dev/null | grep -q 1 || \
-    sudo -u postgres /usr/bin/psql -c \
+    runuser -u postgres -- /usr/bin/psql -c \
     "CREATE ROLE freeswitch WITH SUPERUSER LOGIN PASSWORD '$DB_PASSWORD';"
 
-sudo -u postgres /usr/bin/psql -tc \
+runuser -u postgres -- /usr/bin/psql -tc \
     "SELECT 1 FROM pg_database WHERE datname='fusionpbx'" 2>/dev/null | grep -q 1 || \
-    sudo -u postgres /usr/bin/psql -c "CREATE DATABASE fusionpbx;"
+    runuser -u postgres -- /usr/bin/psql -c "CREATE DATABASE fusionpbx;"
 
-sudo -u postgres /usr/bin/psql -tc \
+runuser -u postgres -- /usr/bin/psql -tc \
     "SELECT 1 FROM pg_database WHERE datname='freeswitch'" 2>/dev/null | grep -q 1 || \
-    sudo -u postgres /usr/bin/psql -c "CREATE DATABASE freeswitch;"
+    runuser -u postgres -- /usr/bin/psql -c "CREATE DATABASE freeswitch;"
 
-sudo -u postgres /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE fusionpbx TO fusionpbx;"
-sudo -u postgres /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE freeswitch TO fusionpbx;"
-sudo -u postgres /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE freeswitch TO freeswitch;"
-sudo -u postgres /usr/bin/psql -c "ALTER USER fusionpbx WITH PASSWORD '$DB_PASSWORD';"
-sudo -u postgres /usr/bin/psql -c "ALTER USER freeswitch WITH PASSWORD '$DB_PASSWORD';"
+runuser -u postgres -- /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE fusionpbx TO fusionpbx;"
+runuser -u postgres -- /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE freeswitch TO fusionpbx;"
+runuser -u postgres -- /usr/bin/psql -c "GRANT ALL PRIVILEGES ON DATABASE freeswitch TO freeswitch;"
+runuser -u postgres -- /usr/bin/psql -c "ALTER USER fusionpbx WITH PASSWORD '$DB_PASSWORD';"
+runuser -u postgres -- /usr/bin/psql -c "ALTER USER freeswitch WITH PASSWORD '$DB_PASSWORD';"
 
 log "PostgreSQL $PG_VERSION ready."
 
@@ -379,6 +381,11 @@ if [[ -n "$PHP_FPM_CONF" && -f "$PHP_FPM_CONF" ]]; then
     sed -i 's/^listen\.group = .*/listen.group = daemon/g'     "$PHP_FPM_CONF"
     sed -i 's/^user = .*/user = freeswitch/g'                  "$PHP_FPM_CONF"
     sed -i 's/^group = .*/group = daemon/g'                    "$PHP_FPM_CONF"
+    # Disable ACL override — when listen.acl_users is set it ignores listen.owner/group
+    sed -i 's/^listen\.acl_users = .*/;listen.acl_users = apache/g' "$PHP_FPM_CONF"
+    # Ensure socket mode allows nginx (running as freeswitch) to connect
+    sed -i '/^;*listen\.mode/c\listen.mode = 0660' "$PHP_FPM_CONF" || \
+        echo "listen.mode = 0660" >> "$PHP_FPM_CONF"
 fi
 
 mkdir -p /var/lib/php/session && chmod 770 /var/lib/php/session
@@ -434,7 +441,8 @@ dnf install -y \
     autoconf automake libtool gcc-c++ make cmake git wget \
     ncurses-devel libjpeg-devel libedit-devel \
     openssl-devel \
-    sqlite-devel curl-devel pcre-devel \
+    sqlite-devel curl-devel pcre-devel pcre2-devel ldns-devel lame-devel lua-devel \
+    "postgresql${PG_VERSION}-devel" libmemcached-awesome-devel libshout-devel mpg123-devel \
     speex-devel speexdsp-devel \
     libsndfile-devel libuuid-devel uuid-devel \
     expat-devel libxml2-devel \
@@ -469,14 +477,16 @@ fi
 ldconfig
 
 # Set PKG_CONFIG_PATH so ./configure can find headers/libs from locally built deps
-export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/lib64/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/lib64/pkgconfig:/usr/pgsql-${PG_VERSION}/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 export C_INCLUDE_PATH="/usr/local/include${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
 export CPLUS_INCLUDE_PATH="/usr/local/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
 export LD_LIBRARY_PATH="/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 log "Build environment paths set for $ARCH"
 
 # ---- 1. libks ----
-if [[ ! -f /usr/local/include/libks/ks.h && ! -f /usr/include/libks/ks.h ]]; then
+if [[ ! -f /usr/local/include/libks/ks.h && ! -f /usr/include/libks/ks.h && \
+      ! -f /usr/include/libks2/libks/ks.h ]] && \
+      ! pkg-config --exists libks2 2>/dev/null; then
     log "Building libks..."
     cd /usr/src
     [[ -d libks ]] && rm -rf libks
@@ -560,10 +570,11 @@ if [[ ! -f /usr/bin/freeswitch ]]; then
     # aarch64-specific: disable video/codec modules that rely on x86 assembler
     # or have no ARM-optimised codec path in this build environment
     if [[ "$ARCH" == "aarch64" ]]; then
-        log "Disabling x86-specific video modules for aarch64..."
-        sed -i 's:^formats/mod_av:#formats/mod_av:'       modules.conf 2>/dev/null || true
-        sed -i 's:^codecs/mod_vpx:#codecs/mod_vpx:'       modules.conf 2>/dev/null || true
-        sed -i 's:^codecs/mod_h26x:#codecs/mod_h26x:'     modules.conf 2>/dev/null || true
+        log "Disabling video modules that need libav/ffmpeg (not available on aarch64 build)..."
+        sed -i 's:^applications/mod_av:#applications/mod_av:'   modules.conf 2>/dev/null || true
+        sed -i 's:^formats/mod_av:#formats/mod_av:'             modules.conf 2>/dev/null || true
+        sed -i 's:^codecs/mod_vpx:#codecs/mod_vpx:'             modules.conf 2>/dev/null || true
+        sed -i 's:^codecs/mod_h26x:#codecs/mod_h26x:'           modules.conf 2>/dev/null || true
     fi
 
     log "Configuring FreeSWITCH..."
@@ -733,7 +744,9 @@ fi
 step "STEP 11 – Configure FusionPBX"
 
 if [[ "$SYSTEM_PASSWORD" == "random" ]]; then
+    set +o pipefail
     SYSTEM_PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
+    set -o pipefail
 fi
 
 export PGPASSWORD="$DB_PASSWORD"
@@ -867,8 +880,10 @@ done
 # XML CDR credentials
 XML_CDR="/etc/freeswitch/autoload_configs/xml_cdr.conf.xml"
 if [[ -f "$XML_CDR" ]]; then
+    set +o pipefail
     CDR_USER=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 12)
     CDR_PASS=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 12)
+    set -o pipefail
     sed -i "s|{v_http_protocol}|http|g"   "$XML_CDR"
     sed -i "s|{domain_name}|127.0.0.1|g"  "$XML_CDR"
     sed -i "s|{v_project_path}||g"         "$XML_CDR"
